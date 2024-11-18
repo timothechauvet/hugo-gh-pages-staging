@@ -1,0 +1,105 @@
+name: 🔎 Staging environment for Hugo
+
+on:
+  workflow_dispatch:
+  push:
+    # All branches except main. Remove it if you prefer to run that manually
+    branches-ignore:
+      - main
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: pages-and-staging
+      cancel-in-progress: true
+    timeout-minutes: 5
+    env:
+      HUGO_VERSION: 0.131.0
+    steps:
+      # Checkout main branch and go to documentation folder
+      - name: Checkout main branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: 'true'
+          ref: 'main'
+
+      - name: Setup Go Environment
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Setup Pages
+        id: pages
+        uses: actions/configure-pages@v4
+
+      - name: Setup Hugo
+        run: |
+          wget -O ${{ runner.temp }}/hugo.deb https://github.com/gohugoio/hugo/releases/download/v${HUGO_VERSION}/hugo_extended_${HUGO_VERSION}_linux-amd64.deb \
+          && sudo dpkg -i ${{ runner.temp }}/hugo.deb
+      
+      # Compile the main page with Hugo
+      - name: Build with Hugo in main branch
+        env:
+          HUGO_ENVIRONMENT: production
+          HUGO_ENV: production
+        run: |
+          cd documentation
+          hugo \
+            --minify \
+            --baseURL "${{ steps.pages.outputs.base_url }}/"
+
+      # Checkout staging branch and go to a different directory
+      - name: Checkout staging branch
+        uses: actions/checkout@v4
+        with:
+          path: staging-branch
+          fetch-depth: 0
+          submodules: 'true'
+
+      # Go to the different directory and compile with Hugo
+      - name: Build with Hugo in staging branch
+        env:
+          HUGO_ENVIRONMENT: production
+          HUGO_ENV: production
+        run: |
+          cd staging-branch/documentation
+          hugo \
+            --minify \
+            --baseURL "${{ steps.pages.outputs.base_url }}/staging-env/"
+      
+      # Move the /public subfolder to the original /public folder inside /staging-env
+      - name: Move public folder to staging
+        run: |
+          ls -lah
+          mv ./staging-branch/documentation/public ./documentation/public/staging-env
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v2
+        with:
+          path: ./documentation/public
+
+  deploy:
+    environment:
+      name: github-pages
+      url: "${{ steps.deployment.outputs.page_url }}"
+    runs-on: ubuntu-latest
+    needs: build
+    concurrency:
+      group: pages-and-staging
+      cancel-in-progress: true
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v3
+    
